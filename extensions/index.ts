@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CONFIG_DIR_NAME, getAgentDir, withFileMutationQueue,
-  type ExtensionAPI, type ExtensionCommandContext,
+  CONFIG_DIR_NAME, CustomEditor, getAgentDir, withFileMutationQueue,
+  type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
 import { Input, SelectList, truncateToWidth } from '@earendil-works/pi-tui';
 import {
@@ -10,18 +10,18 @@ import {
   parseCommand, projectStatus, replacePackage, saveSettings, selectPackage, sourceInfo, sourceOf,
   status, transition, usage,
 } from '../src/config.mjs';
-import { completeArguments } from '../src/completion.mjs';
+import { availableScopes, completeArguments } from '../src/completion.mjs';
 
 type Row = ReturnType<typeof listPackages>[number];
 type Command = NonNullable<ReturnType<typeof parseCommand>>;
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-function configPaths(ctx: ExtensionCommandContext) {
+function configPaths(ctx: ExtensionContext) {
   const userDir = getAgentDir();
   return { userDir, global: join(userDir, 'settings.json'), project: join(ctx.cwd, CONFIG_DIR_NAME, 'settings.json') };
 }
 
-async function rowsFor(ctx: ExtensionCommandContext) {
+async function rowsFor(ctx: ExtensionContext) {
   const paths = configPaths(ctx);
   const user = await loadSettings(paths.global);
   const project = ctx.isProjectTrusted() ? await loadSettings(await canonicalSettings(paths.project, ctx.cwd)) : { value: {} };
@@ -99,14 +99,51 @@ async function apply(ctx: ExtensionCommandContext, command: Command): Promise<bo
 }
 
 export default function extension(pi: ExtensionAPI) {
+  let session: ExtensionContext | undefined;
+  pi.on('session_start', (_event, ctx) => {
+    session = ctx;
+    if (ctx.mode !== 'tui') return;
+    const atFirstArgument = (lines: string[], line: number, col: number) =>
+      (lines[line] ?? '').slice(0, col).trimStart() === '/extensions ';
+    ctx.ui.addAutocompleteProvider((base) => ({
+      triggerCharacters: base.triggerCharacters,
+      getSuggestions(lines, line, col, options) {
+        return base.getSuggestions(lines, line, col, atFirstArgument(lines, line, col) ? { ...options, force: false } : options);
+      },
+      applyCompletion: base.applyCompletion.bind(base),
+      shouldTriggerFileCompletion(lines, line, col) {
+        return atFirstArgument(lines, line, col) || (base.shouldTriggerFileCompletion?.(lines, line, col) ?? true);
+      },
+    }));
+    const previous = ctx.ui.getEditorComponent();
+    ctx.ui.setEditorComponent((tui, theme, keys) => {
+      const editor = previous?.(tui, theme, keys) ?? new CustomEditor(tui, theme, keys, { embedWorkingStatus: true });
+      const handleInput = editor.handleInput.bind(editor);
+      editor.handleInput = (data) => {
+        const before = keys.matches(data, 'tui.input.tab') ? editor.getText().trimStart() : '';
+        handleInput(data);
+        // Pi 1.6 closes the name menu on Tab without requesting argument completions.
+        if (before.startsWith('/') && '/extensions'.startsWith(before)
+          && editor.getText().trimStart() === '/extensions ' && !editor.capturesViewportInput) {
+          handleInput(data);
+        }
+      };
+      return editor;
+    });
+  });
+  pi.on('session_shutdown', () => { session = undefined; });
+
   pi.registerCommand('extensions', {
     description: 'Manage package loading globally and per project (enable, disable, inherit, --help)',
     getArgumentCompletions: async (prefix) => {
       if (!/^(enable|disable|inherit)\s/.test(prefix.trimStart())) return completeArguments(prefix);
       try {
-        const userDir = getAgentDir();
-        const { value } = await loadSettings(join(userDir, 'settings.json'));
-        return completeArguments(prefix, listPackages(value, {}, userDir, userDir), (row: Row) => !isManager(row, root));
+        const ctx = session;
+        if (!ctx) return null;
+        return completeArguments(prefix, await rowsFor(ctx), {
+          projectTrusted: ctx.isProjectTrusted(),
+          isAvailable: (row: Row) => !isManager(row, root),
+        });
       } catch {
         return null;
       }
@@ -127,15 +164,16 @@ export default function extension(pi: ExtensionAPI) {
             const row = await choosePackage(ctx, rows);
             if (!row) return;
             if (isManager(row, root)) { ctx.ui.notify('pi-ext is the manager and cannot disable itself.', 'info'); continue; }
-            const actions: Record<string, Omit<Command, 'target'>> = {
-              'Global: Enable': { verb: 'enable', scope: 'global' },
-              'Global: Disable': { verb: 'disable', scope: 'global' },
-            };
-            if (ctx.isProjectTrusted()) Object.assign(actions, {
-              'Project: Explicitly enable': { verb: 'enable', scope: 'project' },
-              'Project: Explicitly disable': { verb: 'disable', scope: 'project' },
-              'Project: Follow global setting': { verb: 'inherit', scope: 'project' },
-            });
+            const trusted = ctx.isProjectTrusted();
+            const actions: Record<string, Omit<Command, 'target'>> = {};
+            for (const verb of ['enable', 'disable'] as const) {
+              for (const scope of availableScopes(row, verb, trusted)) {
+                const label = `${scope === 'global' ? 'Global' : 'Project'}: ${verb === 'enable' ? 'Enable' : 'Disable'}`;
+                actions[label] = { verb, scope };
+              }
+            }
+            if (trusted && row.project) actions['Project: Follow global setting'] = { verb: 'inherit', scope: 'project' };
+            if (!Object.keys(actions).length) { ctx.ui.notify('No actions available for this package.', 'info'); continue; }
             const action = await ctx.ui.select(row.source, Object.keys(actions));
             if (action) command = { ...actions[action], target: row.id };
           }

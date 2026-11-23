@@ -29,17 +29,29 @@ send_command() {
       sleep 0.1
     done
     for part in "$@"; do sleep 0.35; printf '%s' "$part"; done
-    sleep 0.35; printf '\r'
+    sleep 0.35
+    local menu_seen=yes
+    if [[ ${expect_menu:-} == yes ]]; then
+      menu_seen=no
+      for ((i = 0; i < 25; i++)); do
+        if grep -Fq 'Enable a package' "$tmp/tui.log"; then menu_seen=yes; break; fi
+        sleep 0.1
+      done
+    else
+      printf '\r'
+    fi
     sleep 0.8; printf '\033'
     sleep 0.7; printf '\003'
     sleep 0.55; printf '\004'
+    [[ $menu_seen == yes ]]
   } | timeout 12 script -f -q -e -c 'stty rows 30 cols 100; "$SMOKE_PI" --offline --no-session' "$tmp/tui.log" >/dev/null) || {
-    strings "$tmp/tui.log" | tail -25 >&2
+    strings "$tmp/tui.log" | grep -Ei 'exten|enable|disable|error' | tail -25 >&2
     return 1
   }
 }
 
 check project true
+expect_menu=yes send_command '/exten' $'\t'
 cp "$tmp/agent/settings.json" "$tmp/before.json"
 send_command '/extensions disable fixture'
 cmp <(jq -c .packages "$tmp/before.json") <(jq -c .packages "$tmp/agent/settings.json")

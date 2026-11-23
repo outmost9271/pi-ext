@@ -1,6 +1,6 @@
 {
   "name": "pi-ext",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Manage installed Pi packages from /extensions",
   "type": "module",
   "license": "MIT",

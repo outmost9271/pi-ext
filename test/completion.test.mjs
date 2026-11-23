@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { completeArguments } from '../src/completion.mjs';
-import { listPackages, parseCommand } from '../src/config.mjs';
+import { listPackages, parseCommand, transition } from '../src/config.mjs';
 
 const packages = (...sources) => listPackages({ packages: sources }, {}, '/user', '/project');
-const values = (prefix, rows, available) => completeArguments(prefix, rows, available).map((item) => item.value);
+const values = (prefix, rows, options = { projectTrusted: true }) => completeArguments(prefix, rows, options).map((item) => item.value);
 const rows = packages('npm:fixture@1', 'git:github.com/example/tools@v1', '/local/my package');
+const disabled = (row, scope) => transition(row, { verb: 'disable', scope });
 
 test('completes actions, package names, and scopes as full argument strings', () => {
   assert.deepEqual(values(''), ['enable ', 'disable ', 'inherit ', '--help']);
@@ -20,11 +21,26 @@ test('completes actions, package names, and scopes as full argument strings', ()
 });
 
 test('handles quoted and ambiguous package names and skips unavailable packages', () => {
-  assert.deepEqual(values('enable "my p', rows), ['enable "my package" ']);
-  assert.deepEqual(values('enable "my package" --p', rows).map(parseCommand), [
-    { verb: 'enable', target: 'my package', scope: 'project' },
+  assert.deepEqual(values('inherit "my p', rows), ['inherit "my package"']);
+  assert.deepEqual(values('inherit "my p', rows).map(parseCommand), [
+    { verb: 'inherit', target: 'my package', scope: 'project' },
   ]);
   const ambiguous = packages('git:github.com/example/tools', 'git:github.com/other/tools');
-  assert.deepEqual(values('inherit tools', ambiguous, (row) => row.source.includes('/other/')), ['inherit git:github.com/other/tools']);
+  assert.deepEqual(values('inherit tools', ambiguous, { isAvailable: (row) => row.source.includes('/other/') }), ['inherit git:github.com/other/tools']);
   assert.deepEqual(values('enable tools ', ambiguous), []);
+});
+
+test('shows only packages and scopes where the requested state would change', () => {
+  const [on, other] = rows;
+  const off = { ...other, global: disabled(other, 'global') };
+  assert.deepEqual(values('enable ', [on, off]), ['enable tools ']);
+  assert.deepEqual(values('disable ', [on, off]), ['disable fixture ']);
+
+  const mixed = { ...on, project: disabled(on, 'project') };
+  assert.deepEqual(values('enable fixture ', [mixed]), ['enable fixture --project']);
+  assert.deepEqual(values('disable fixture ', [mixed]), ['disable fixture --global']);
+  assert.deepEqual(values('enable ', [mixed], { projectTrusted: false }), []);
+  const reverse = { ...off, project: transition(off, { verb: 'enable', scope: 'project' }) };
+  assert.deepEqual(values('enable tools ', [reverse]), ['enable tools --global']);
+  assert.deepEqual(values('disable tools ', [reverse]), ['disable tools --project']);
 });
