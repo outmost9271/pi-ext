@@ -1,0 +1,15 @@
+{
+  "name": "pi-ext",
+  "version": "0.1.0",
+  "description": "Manage installed Pi packages from /extensions",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "repository": "https://github.com/outmost9271/pi-ext",
+  "pi": { "extensions": ["./extensions/index.ts"] },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}
