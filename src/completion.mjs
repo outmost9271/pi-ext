@@ -33,23 +33,27 @@ export function completeArguments(input, rows = [], { isAvailable = () => true, 
   const prefix = input.trimStart();
   const command = prefix.match(/^(enable|disable|inherit)\s+(.*)$/s);
   if (!command) {
-    return verbs.filter(([verb]) => verb.startsWith(prefix) && !(verb === '--help' && prefix === verb)).map(([verb, description]) => ({
+    const head = prefix.trimEnd();
+    return verbs.filter(([verb]) => verb.startsWith(head) && !(verb === '--help' && head === verb)).map(([verb, description]) => ({
       value: verb === '--help' ? verb : `${verb} `, label: verb, description,
     }));
   }
-  const [, verb, rest] = command;
-  const target = rest.match(/^("[^"]*"|'[^']*'|[^\s"']+)\s+([^\s]*)$/);
+  const [, verb, body] = command;
+  let rest = body;
+  const target = rest.match(/^("[^"]*"|'[^']*'|[^\s"']+)\s+(\S*)\s*$/);
   if (target) {
-    if (verb === 'inherit') return [];
-    let scopes;
-    try {
-      const row = selectPackage(rows, target[1].replace(/^(['"])(.*)\1$/, '$2'));
-      if (!isAvailable(row)) return [];
-      scopes = availableScopes(row, verb, projectTrusted);
-    } catch { return []; }
-    return scopeItems
-      .filter(([flag]) => scopes.includes(flag.slice(2)) && flag !== target[2] && flag.startsWith(target[2]))
-      .map(([flag, description]) => ({ value: `${verb} ${target[1]} ${flag}`, label: flag, description }));
+    let row;
+    try { row = selectPackage(rows, target[1].replace(/^(['"])(.*)\1$/, '$2')); }
+    catch { /* An incomplete package with trailing spaces is still a package query. */ }
+    if (row) {
+      if (verb === 'inherit' || !isAvailable(row)) return [];
+      const scopes = availableScopes(row, verb, projectTrusted);
+      return scopeItems
+        .filter(([flag]) => scopes.includes(flag.slice(2)) && flag !== target[2] && flag.startsWith(target[2]))
+        .map(([flag, description]) => ({ value: `${verb} ${target[1]} ${flag}`, label: flag, description }));
+    }
+    if (target[2]) return [];
+    rest = target[1];
   }
   if (!/^(?:"[^"]*"?|'[^']*'?|[^\s"']*)$/.test(rest)) return [];
   const unquoted = rest.replace(/^(['"])(.*)\1$/, '$2');

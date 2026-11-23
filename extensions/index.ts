@@ -103,29 +103,66 @@ export default function extension(pi: ExtensionAPI) {
   pi.on('session_start', (_event, ctx) => {
     session = ctx;
     if (ctx.mode !== 'tui') return;
-    const atFirstArgument = (lines: string[], line: number, col: number) =>
-      (lines[line] ?? '').slice(0, col).trimStart() === '/extensions ';
+    const inArguments = (lines: string[], line: number, col: number) =>
+      line === 0 && /^\s*\/extensions /.test((lines[line] ?? '').slice(0, col));
+    const atEnd = (lines: string[], line: number, col: number) =>
+      lines.length === 1 && col === lines[line]?.length;
+    let refreshEditor: ((text: string, line: number, col: number) => void) | undefined;
+    let completionRefreshPending = false;
     ctx.ui.addAutocompleteProvider((base) => ({
       triggerCharacters: base.triggerCharacters,
       getSuggestions(lines, line, col, options) {
-        return base.getSuggestions(lines, line, col, atFirstArgument(lines, line, col) ? { ...options, force: false } : options);
+        if (!inArguments(lines, line, col)) return base.getSuggestions(lines, line, col, options);
+        // Pi's forced Tab path otherwise tries filename completion for command arguments.
+        if (!atEnd(lines, line, col)) return null;
+        return base.getSuggestions(lines, line, col, { ...options, force: false });
       },
-      applyCompletion: base.applyCompletion.bind(base),
+      applyCompletion(lines, line, col, item, prefix) {
+        const result = base.applyCompletion(lines, line, col, item, prefix);
+        if (inArguments(result.lines, result.cursorLine, result.cursorCol)
+          && atEnd(result.lines, result.cursorLine, result.cursorCol)) {
+          const text = result.lines.join('\n');
+          // Run after Pi applies the selection and closes the old menu. This also handles mouse and Enter.
+          completionRefreshPending = true;
+          queueMicrotask(() => {
+            completionRefreshPending = false;
+            refreshEditor?.(text, result.cursorLine, result.cursorCol);
+          });
+        }
+        return result;
+      },
       shouldTriggerFileCompletion(lines, line, col) {
-        return atFirstArgument(lines, line, col) || (base.shouldTriggerFileCompletion?.(lines, line, col) ?? true);
+        return inArguments(lines, line, col) || (base.shouldTriggerFileCompletion?.(lines, line, col) ?? true);
       },
     }));
     const previous = ctx.ui.getEditorComponent();
     ctx.ui.setEditorComponent((tui, theme, keys) => {
       const editor = previous?.(tui, theme, keys) ?? new CustomEditor(tui, theme, keys, { embedWorkingStatus: true });
+      // Pi 1.6 has no public request for a regular refresh; a forced Tab can insert a lone match.
+      const compatible = editor as typeof editor & {
+        getCursor?: () => { line: number; col: number };
+        tryTriggerAutocomplete?: () => void;
+      };
+      if (typeof compatible.tryTriggerAutocomplete !== 'function' || typeof compatible.getCursor !== 'function') return editor;
+      refreshEditor = (text, line, col) => {
+        const cursor = compatible.getCursor?.();
+        if (!editor.capturesViewportInput && editor.getText() === text && cursor?.line === line && cursor.col === col) {
+          compatible.tryTriggerAutocomplete?.();
+        }
+      };
       const handleInput = editor.handleInput.bind(editor);
       editor.handleInput = (data) => {
-        const before = keys.matches(data, 'tui.input.tab') ? editor.getText().trimStart() : '';
+        const before = editor.getText();
+        const previousCursor = compatible.getCursor?.();
         handleInput(data);
-        // Pi 1.6 closes the name menu on Tab without requesting argument completions.
-        if (before.startsWith('/') && '/extensions'.startsWith(before)
-          && editor.getText().trimStart() === '/extensions ' && !editor.capturesViewportInput) {
-          handleInput(data);
+        const after = editor.getText();
+        const cursor = compatible.getCursor?.();
+        if (!completionRefreshPending && cursor && (before !== after
+          || cursor.line !== previousCursor?.line || cursor.col !== previousCursor?.col)) {
+          const lines = after.split('\n');
+          if (!inArguments(lines, cursor.line, cursor.col) || !atEnd(lines, cursor.line, cursor.col)) return;
+          // Covers whitespace, quotes, deletion and paste when the native menu was closed.
+          refreshEditor?.(after, cursor.line, cursor.col);
         }
       };
       return editor;

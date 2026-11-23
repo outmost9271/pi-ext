@@ -22,7 +22,7 @@ pi install git:github.com/outmost9271/pi-ext
 /extensions inherit <包>
 ```
 
-在命令编辑器里按 `Tab` 补全 `/extensions` 后，会立即显示操作列表。包名候选只显示能改变启停状态的包，并标明可用作用域；如果全局和项目状态不同，只提示符合所选操作的作用域。界面与提示为英文；输入 `/extensions --help` 可查看用法。
+在命令编辑器里按 `Tab` 补全 `/extensions` 后，会立即显示操作列表；选中操作或包名后自动显示下一层候选。也可以手输部分参数、多余空格，或粘贴含引号的参数。包名候选只显示能改变启停状态的包，并标明可用作用域；如果全局和项目状态不同，只提示符合所选操作的作用域。界面与提示为英文；输入 `/extensions --help` 可查看用法。
 
 `enable` 和 `disable` 必须明确指定且只指定一个作用域。`inherit` 仅作用于当前项目。可用列表中的完整来源消除重名歧义；来源含空格时用引号括起来。保存后可立即重载，也可以稍后使用 `/reload`。
 
@@ -46,6 +46,7 @@ pi install git:github.com/outmost9271/pi-ext
 ```bash
 npm test
 PI_BIN=/绝对路径/pi bash test/pi-smoke.sh
+PI_BIN=/绝对路径/pi PI_SMOKE_TUI_MODE=regular bash test/pi-smoke.sh
 ```
 
 集成测试在 Linux 上使用 `script` 和 `jq`，用临时设置目录启动 Pi，不修改正在使用的配置。

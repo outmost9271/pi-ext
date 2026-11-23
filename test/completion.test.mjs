@@ -20,6 +20,18 @@ test('completes actions, package names, and scopes as full argument strings', ()
   assert.deepEqual(values('inherit fixture ', rows), []);
 });
 
+test('accepts extra separators, trailing spaces on partial tokens, and both quote forms', () => {
+  for (const prefix of [' en', '  en ', '\t en  ']) assert.deepEqual(values(prefix, rows), ['enable ']);
+  for (const prefix of ['disable fix ', '  disable  fix  ', 'disable  "fix"  ']) {
+    assert.deepEqual(values(prefix, rows), ['disable fixture ']);
+  }
+  assert.deepEqual(values(" disable  'fixture'   --pr  ", rows), ["disable 'fixture' --project"]);
+  assert.deepEqual(values(' disable   "fixture"   -- ', rows), ['disable "fixture" --global', 'disable "fixture" --project']);
+  for (const prefix of ['--help', 'disable fixture --global', 'disable fixture --bogus', 'disable fixture --global --project', 'inherit fixture --project']) {
+    assert.deepEqual(values(prefix, rows), []);
+  }
+});
+
 test('handles quoted and ambiguous package names and skips unavailable packages', () => {
   assert.deepEqual(values('inherit "my p', rows), ['inherit "my package"']);
   assert.deepEqual(values('inherit "my p', rows).map(parseCommand), [
