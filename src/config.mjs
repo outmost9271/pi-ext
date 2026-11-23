@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 export const TYPES = ['extensions', 'skills', 'prompts', 'themes'];
 const META = 'x-pi-ext';
-const usage = '/extensions enable|disable <包> --global|--project；/extensions inherit <包>';
+export const usage = 'Usage: /extensions <enable|disable> <package> <--global|--project> or /extensions inherit <package>. Choose exactly one scope for enable or disable.';
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 export const sourceOf = (entry) => typeof entry === 'string' ? entry : entry.source;
 const filters = (value) => Object.fromEntries(TYPES.map((type) => [type, [...value]]));
@@ -41,9 +41,9 @@ export function sourceInfo(source, base) {
     try {
       const scp = repo.match(/^[^/@]+@([^/:]+):(.+)$/);
       url = new URL(scp ? `ssh://${scp[1]}/${scp[2]}` : repo.includes('://') ? repo : `https://${repo}`);
-    } catch { throw new Error('无法识别 Git 软件包来源'); }
+    } catch { throw new Error('Unrecognized Git package source.'); }
     const path = url.pathname.replace(/^\/+|\/+$/g, '').split('@', 1)[0].replace(/\.git$/, '');
-    if (!path) throw new Error('Git 软件包来源缺少仓库路径');
+    if (!path) throw new Error('Git package source is missing a repository path.');
     return { id: `git:${url.hostname}/${path}`, name: basename(path), source };
   }
   const path = resolve(base, value === '~' ? homedir() : value.startsWith('~/') ? join(homedir(), value.slice(2)) : value);
@@ -65,7 +65,7 @@ export function isManager(info, ownRoot) {
 export function packages(settings) {
   const entries = settings.packages === undefined ? [] : settings.packages;
   if (!Array.isArray(entries) || entries.some((p) => typeof p !== 'string' && (!object(p) || typeof p.source !== 'string'))) {
-    throw new Error('Pi 的 packages 配置格式不正确，未作修改');
+    throw new Error('Invalid Pi packages configuration. No changes made.');
   }
   return entries;
 }
@@ -90,26 +90,26 @@ function wrap(applied, mode, previous) {
 }
 
 export function status(entry) {
-  if (typeof entry === 'string') return '启用';
+  if (typeof entry === 'string') return 'Enabled';
   const managed = marker(entry);
-  if (managed === null) return '已外部修改';
-  if (entry.autoload !== false && TYPES.every((type) => Array.isArray(entry[type]) && entry[type].length === 0)) return '禁用';
-  if (managed?.mode === 'disable') return '禁用';
-  return entry.autoload === false || TYPES.some((type) => entry[type] !== undefined) ? '部分启用' : '启用';
+  if (managed === null) return 'Edited externally';
+  if (entry.autoload !== false && TYPES.every((type) => Array.isArray(entry[type]) && entry[type].length === 0)) return 'Disabled';
+  if (managed?.mode === 'disable') return 'Disabled';
+  return entry.autoload === false || TYPES.some((type) => entry[type] !== undefined) ? 'Partially enabled' : 'Enabled';
 }
 
 export function projectStatus(entry) {
-  if (!entry) return '跟随全局';
+  if (!entry) return 'Inherit';
   const managed = marker(entry);
-  if (managed === null) return '已外部修改';
-  if (!managed) return '原生设置';
-  return managed.mode === 'enable' ? '显式启用' : '显式禁用';
+  if (managed === null) return 'Edited externally';
+  if (!managed) return 'Native settings';
+  return managed.mode === 'enable' ? 'Explicitly enabled' : 'Explicitly disabled';
 }
 
 export function effectiveStatus(global, project) {
   if (!project) return status(global);
-  if (marker(project)?.mode === 'disable') return '禁用';
-  if (project.autoload === false) return '按资源覆盖';
+  if (marker(project)?.mode === 'disable') return 'Disabled';
+  if (project.autoload === false) return 'Per-resource override';
   return status(project);
 }
 
@@ -129,7 +129,7 @@ export function selectPackage(rows, target) {
   const exact = rows.filter((row) => [row.id, row.source].includes(target));
   const matches = exact.length ? exact : rows.filter((row) => row.name === target);
   if (matches.length !== 1 || matches[0].ambiguousGlobal) {
-    throw new Error(matches.length ? '包名不唯一，请使用列表中的完整来源；重复声明需先清理' : '未找到这个用户级软件包');
+    throw new Error(matches.length ? 'Ambiguous package. Use the full source, or remove duplicate declarations first.' : 'User-installed package not found.');
   }
   return matches[0];
 }
@@ -138,13 +138,13 @@ function assertManageable(info) {
   if (!info.path) return;
   let directory = false;
   try { directory = statSync(info.path).isDirectory(); } catch { /* missing */ }
-  if (!directory) throw new Error('Pi 的包过滤不适用于单文件扩展或丢失的本地包；未作修改');
+  if (!directory) throw new Error('Pi cannot filter single-file extensions or missing local packages. No changes made.');
 }
 
 function enabled(entry) {
   if (typeof entry === 'string') return { source: entry };
-  if (entry.autoload === false) throw new Error('已有原生增量过滤，无法安全转成独立启用；请先用 pi config 调整');
-  if (status(entry) !== '禁用') return { ...entry };
+  if (entry.autoload === false) throw new Error('Cannot replace existing native delta filters safely. Adjust them with pi config first.');
+  if (status(entry) !== 'Disabled') return { ...entry };
   const result = { ...entry };
   for (const type of TYPES) delete result[type];
   return result;
@@ -152,10 +152,10 @@ function enabled(entry) {
 
 export function transition(row, { scope, verb }) {
   const local = scope === 'project';
-  if (local && row.ambiguousProject) throw new Error('项目中有重复声明，请先清理');
+  if (local && row.ambiguousProject) throw new Error('Remove duplicate project declarations first.');
   const current = local ? row.project : row.global;
   const managed = marker(current);
-  if (managed === null) throw new Error('该条目已被外部编辑，为避免覆盖，请先手动协调原生配置');
+  if (managed === null) throw new Error('This entry was edited externally. Reconcile the Pi settings before changing it.');
   if (verb === 'inherit') return managed ? managed.previous : current;
   if (managed?.mode === verb) return current;
   assertManageable(row);
@@ -163,9 +163,9 @@ export function transition(row, { scope, verb }) {
   if (!local) {
     if (verb === 'enable') {
       if (managed?.mode === 'disable') return original;
-      return status(current) === '禁用' ? enabled(current) : current;
+      return status(current) === 'Disabled' ? enabled(current) : current;
     }
-    if (status(current) === '禁用') return current;
+    if (status(current) === 'Disabled') return current;
     return wrap({ ...(object(current) ? current : { source: current }), autoload: true, ...filters([]) }, verb, current);
   }
   if (verb === 'disable') {
@@ -173,7 +173,7 @@ export function transition(row, { scope, verb }) {
     return wrap({ source: row.path ?? row.source, autoload: false, ...filters(['!**']) }, verb, original);
   }
   const globalMarker = marker(row.global);
-  if (globalMarker === null && !original) throw new Error('全局条目已被外部编辑，无法安全确定原过滤规则');
+  if (globalMarker === null && !original) throw new Error('The global entry was edited externally. The original filters cannot be determined safely.');
   const base = original ?? globalMarker?.previous ?? row.global;
   const native = enabled(base);
   const source = original ? sourceOf(original) : row.path ?? row.source;
@@ -205,7 +205,7 @@ export async function loadSettings(path) {
     if (!object(value)) throw new Error();
     packages(value);
     return { raw, value };
-  } catch { throw new Error(`配置无法解析，未作修改：${path}`); }
+  } catch { throw new Error(`Cannot parse settings at ${path}. No changes made.`); }
 }
 
 export async function canonicalSettings(path, projectRoot) {
@@ -220,7 +220,7 @@ export async function canonicalSettings(path, projectRoot) {
   if (projectRoot) {
     const difference = relative(await realpath(projectRoot), actual);
     if (!difference || isAbsolute(difference) || difference === '..' || difference.startsWith(`..${sep}`)) {
-      throw new Error('项目设置指向项目目录之外，未作修改');
+      throw new Error('Project settings point outside the project directory. No changes made.');
     }
   }
   return actual;
@@ -232,7 +232,7 @@ export async function saveSettings(path, raw, value) {
   const mode = raw === undefined ? 0o600 : (await stat(path)).mode & 0o777;
   try {
     await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx', mode });
-    if (await readRaw(path) !== raw) throw new Error('配置已被其他进程修改，请重试');
+    if (await readRaw(path) !== raw) throw new Error('Another process changed the settings. Try again.');
     await rename(temp, path);
   } finally {
     await unlink(temp).catch((error) => { if (error.code !== 'ENOENT') throw error; });

@@ -24,7 +24,7 @@ test('requires exactly one explicit scope and supports quoted sources', () => {
 
 test('global changes preserve manually selected resources and restore the original declaration', () => {
   const off = change(row(entry), 'global', 'disable');
-  assert.equal(status(off), '禁用');
+  assert.equal(status(off), 'Disabled');
   for (const type of TYPES) assert.deepEqual(off[type], []);
   assert.deepEqual(change(row(off), 'global', 'enable'), entry);
   assert.equal(change(row(change(row(source), 'global', 'disable')), 'global', 'enable'), source);
@@ -33,21 +33,21 @@ test('global changes preserve manually selected resources and restore the origin
 test('project enable wins over global disable, preserving the original global filters', () => {
   const off = change(row(entry), 'global', 'disable');
   const on = change(row(off), 'project', 'enable');
-  assert.equal(projectStatus(on), '显式启用');
-  assert.equal(effectiveStatus(off, on), '部分启用');
+  assert.equal(projectStatus(on), 'Explicitly enabled');
+  assert.equal(effectiveStatus(off, on), 'Partially enabled');
   assert.deepEqual(on.extensions, entry.extensions);
   assert.deepEqual(on.skills, entry.skills);
   assert.equal(change(row(off, on), 'project', 'inherit'), null);
-  assert.equal(effectiveStatus(off, undefined), '禁用');
+  assert.equal(effectiveStatus(off, undefined), 'Disabled');
 });
 
 test('project disable wins over global enable and removes only manager-owned changes', () => {
   const policy = { source, autoload: false, skills: ['-skills/extra/SKILL.md'] };
   const off = change(row(entry, policy), 'project', 'disable');
-  assert.equal(projectStatus(off), '显式禁用');
-  assert.equal(effectiveStatus(entry, off), '禁用');
+  assert.equal(projectStatus(off), 'Explicitly disabled');
+  assert.equal(effectiveStatus(entry, off), 'Disabled');
   assert.deepEqual(change(row(entry, off), 'project', 'inherit'), policy);
-  assert.throws(() => change(row(entry, policy), 'project', 'enable'), /原生增量过滤/);
+  assert.throws(() => change(row(entry, policy), 'project', 'enable'), /native delta filters/);
   assert.deepEqual(change(row(entry, policy), 'project', 'inherit'), policy);
 });
 
@@ -56,10 +56,10 @@ test('normalizes sources, rejects ambiguous short names, and guards external edi
   assert.equal(sourceInfo('npm:@org/foo@1', '/a').id, 'npm:@org/foo');
   assert.equal(sourceInfo('../pkgs/p', '/a/user').id, sourceInfo('../a/pkgs/p', '/b').id);
   const rows = listPackages({ packages: [source, 'git:github.com/other/tools'] }, {}, '/a', '/b');
-  assert.throws(() => selectPackage(rows, 'tools'), /不唯一/);
+  assert.throws(() => selectPackage(rows, 'tools'), /Ambiguous package/);
   assert.equal(selectPackage(rows, source).id, 'git:github.com/example/tools');
   const off = change(row(entry), 'global', 'disable');
-  assert.throws(() => change(row({ ...off, skills: ['+something'] }), 'global', 'enable'), /外部编辑/);
+  assert.throws(() => change(row({ ...off, skills: ['+something'] }), 'global', 'enable'), /edited externally/);
 });
 
 test('atomic settings writes retain unrelated keys and refuse stale snapshots', async (t) => {
@@ -71,5 +71,5 @@ test('atomic settings writes retain unrelated keys and refuse stale snapshots', 
   const next = replacePackage(value, 0, null);
   await saveSettings(path, raw, next);
   assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), { theme: 'dark' });
-  await assert.rejects(() => saveSettings(path, raw, value), /其他进程修改/);
+  await assert.rejects(() => saveSettings(path, raw, value), /Another process changed/);
 });

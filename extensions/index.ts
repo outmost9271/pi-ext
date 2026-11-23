@@ -8,8 +8,9 @@ import { Input, SelectList, truncateToWidth } from '@earendil-works/pi-tui';
 import {
   canonicalSettings, effectiveStatus, isManager, listPackages, loadSettings, packages,
   parseCommand, projectStatus, replacePackage, saveSettings, selectPackage, sourceInfo, sourceOf,
-  status, transition,
+  status, transition, usage,
 } from '../src/config.mjs';
+import { completeArguments } from '../src/completion.mjs';
 
 type Row = ReturnType<typeof listPackages>[number];
 type Command = NonNullable<ReturnType<typeof parseCommand>>;
@@ -32,7 +33,7 @@ async function choosePackage(ctx: ExtensionCommandContext, rows: Row[]) {
     const input = new Input();
     const entries = rows.map((row, index) => ({
       value: String(index),
-      label: `${row.name}${isManager(row, root) ? '（管理器）' : ''} ｜ ${status(row.global)} / ${ctx.isProjectTrusted() ? projectStatus(row.project) : '不受信任'} / ${effectiveStatus(row.global, row.project)}`,
+      label: `${row.name}${isManager(row, root) ? ' (manager)' : ''} | ${status(row.global)} / ${ctx.isProjectTrusted() ? projectStatus(row.project) : 'Untrusted'} / ${effectiveStatus(row.global, row.project)}`,
       description: row.source,
     }));
     const makeList = (query: string) => {
@@ -53,9 +54,9 @@ async function choosePackage(ctx: ExtensionCommandContext, rows: Row[]) {
       set focused(value) { input.focused = value; },
       render(width: number) {
         return [
-          truncateToWidth(theme.fg('accent', '插件管理　｜　全局 / 项目 / 配置有效状态'), width),
+          truncateToWidth(theme.fg('accent', 'Extensions | Global / Project / Effective'), width),
           ...input.render(width), ...list.render(width),
-          truncateToWidth(theme.fg('dim', '输入搜索 · ↑↓ 选择 · Enter 打开操作 · Esc 返回'), width),
+          truncateToWidth(theme.fg('dim', 'Type to search · ↑↓ Select · Enter Actions · Esc Back'), width),
         ];
       },
       invalidate() { input.invalidate(); list.invalidate(); },
@@ -70,22 +71,22 @@ async function choosePackage(ctx: ExtensionCommandContext, rows: Row[]) {
         tui.requestRender();
       },
     };
-  }, { blocked: { kind: 'question', message: '选择要管理的插件' } });
+  }, { blocked: { kind: 'question', message: 'Select a package to manage' } });
 }
 
 async function apply(ctx: ExtensionCommandContext, command: Command): Promise<boolean> {
   const local = command.scope === 'project';
-  if (local && !ctx.isProjectTrusted()) throw new Error('当前项目不受信任，不能修改项目设置');
+  if (local && !ctx.isProjectTrusted()) throw new Error('This project is not trusted. Project settings cannot be changed.');
   const paths = configPaths(ctx);
   const globalFile = await canonicalSettings(paths.global);
   const file = local ? await canonicalSettings(paths.project, ctx.cwd) : globalFile;
-  if (local && file === globalFile) throw new Error('项目与全局配置指向同一个文件，未作修改');
+  if (local && file === globalFile) throw new Error('Project and global settings point to the same file. No changes made.');
   return withFileMutationQueue(file, async () => {
     const target = await loadSettings(file);
     const user = local ? await loadSettings(globalFile) : target;
     const project = local ? target.value : {};
     const row = selectPackage(listPackages(user.value, project, paths.userDir, ctx.cwd), command.target);
-    if (isManager(row, root)) throw new Error('pi-ext 不允许管理自身；可用 Pi 原生配置调整');
+    if (isManager(row, root)) throw new Error('pi-ext cannot manage itself. Use Pi settings instead.');
     const next = transition(row, command);
     const index = local
       ? packages(project).findIndex((entry) => sourceInfo(sourceOf(entry), ctx.cwd).id === row.id)
@@ -99,38 +100,49 @@ async function apply(ctx: ExtensionCommandContext, command: Command): Promise<bo
 
 export default function extension(pi: ExtensionAPI) {
   pi.registerCommand('extensions', {
-    description: '管理已安装软件包的全局开关和项目覆盖',
+    description: 'Manage package loading globally and per project (enable, disable, inherit, --help)',
+    getArgumentCompletions: async (prefix) => {
+      if (!/^(enable|disable|inherit)\s/.test(prefix.trimStart())) return completeArguments(prefix);
+      try {
+        const userDir = getAgentDir();
+        const { value } = await loadSettings(join(userDir, 'settings.json'));
+        return completeArguments(prefix, listPackages(value, {}, userDir, userDir), (row: Row) => !isManager(row, root));
+      } catch {
+        return null;
+      }
+    },
     handler: async (args, ctx) => {
       if (ctx.mode !== 'tui') {
-        ctx.ui.notify('/extensions 需要交互式终端', 'error');
+        ctx.ui.notify('/extensions requires interactive mode.', 'error');
         return;
       }
       let shouldReload = false;
       try {
+        if (args.trim() === '--help') { ctx.ui.notify(usage, 'info'); return; }
         let command = parseCommand(args);
         if (!command) {
           const rows = await rowsFor(ctx);
-          if (!rows.length) { ctx.ui.notify('没有用户级安装的软件包', 'info'); return; }
+          if (!rows.length) { ctx.ui.notify('No user-installed packages found.', 'info'); return; }
           while (!command) {
             const row = await choosePackage(ctx, rows);
             if (!row) return;
-            if (isManager(row, root)) { ctx.ui.notify('pi-ext 是管理器，不提供自禁用操作', 'info'); continue; }
+            if (isManager(row, root)) { ctx.ui.notify('pi-ext is the manager and cannot disable itself.', 'info'); continue; }
             const actions: Record<string, Omit<Command, 'target'>> = {
-              '全局：启用': { verb: 'enable', scope: 'global' },
-              '全局：禁用': { verb: 'disable', scope: 'global' },
+              'Global: Enable': { verb: 'enable', scope: 'global' },
+              'Global: Disable': { verb: 'disable', scope: 'global' },
             };
             if (ctx.isProjectTrusted()) Object.assign(actions, {
-              '项目：显式启用': { verb: 'enable', scope: 'project' },
-              '项目：显式禁用': { verb: 'disable', scope: 'project' },
-              '项目：恢复跟随全局': { verb: 'inherit', scope: 'project' },
+              'Project: Explicitly enable': { verb: 'enable', scope: 'project' },
+              'Project: Explicitly disable': { verb: 'disable', scope: 'project' },
+              'Project: Follow global setting': { verb: 'inherit', scope: 'project' },
             });
             const action = await ctx.ui.select(row.source, Object.keys(actions));
             if (action) command = { ...actions[action], target: row.id };
           }
         }
-        if (!await apply(ctx, command)) { ctx.ui.notify('配置无需修改', 'info'); return; }
-        ctx.ui.notify('配置已保存', 'info');
-        shouldReload = await ctx.ui.confirm('立即重载？', '选择否可稍后使用 /reload，或在下次启动时生效。');
+        if (!await apply(ctx, command)) { ctx.ui.notify('No settings changed.', 'info'); return; }
+        ctx.ui.notify('Settings saved.', 'info');
+        shouldReload = await ctx.ui.confirm('Reload now?', 'Choose No to apply on /reload or on the next launch.');
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), 'error');
       }

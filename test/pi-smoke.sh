@@ -21,14 +21,15 @@ check() {
 }
 
 send_command() {
-  local command=$1
+  local part
   : > "$tmp/tui.log"
   (cd "$tmp/project"; {
     for ((i = 0; i < 40; i++)); do
       if grep -q 'No models available' "$tmp/tui.log"; then break; fi
       sleep 0.1
     done
-    sleep 0.25; printf '%s\r' "$command"
+    for part in "$@"; do sleep 0.35; printf '%s' "$part"; done
+    sleep 0.35; printf '\r'
     sleep 0.8; printf '\033'
     sleep 0.7; printf '\003'
     sleep 0.55; printf '\004'
@@ -43,7 +44,8 @@ cp "$tmp/agent/settings.json" "$tmp/before.json"
 send_command '/extensions disable fixture'
 cmp <(jq -c .packages "$tmp/before.json") <(jq -c .packages "$tmp/agent/settings.json")
 check project true
-send_command '/extensions disable fixture --global'
+send_command '/extensions dis' $'\t' 'fix' $'\t' '--g' $'\t'
+grep -Fq 'Settings saved.' "$tmp/tui.log" || { strings "$tmp/tui.log" | tail -100 >&2; exit 1; }
 jq -e '.packages[1]["x-pi-ext"].mode == "disable"' "$tmp/agent/settings.json" >/dev/null
 check project false
 send_command '/extensions enable fixture --project'
