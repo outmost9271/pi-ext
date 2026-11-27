@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -37,8 +37,37 @@ test('project enable wins over global disable, preserving the original global fi
   assert.equal(effectiveStatus(off, on), 'Partially enabled');
   assert.deepEqual(on.extensions, entry.extensions);
   assert.deepEqual(on.skills, entry.skills);
+  assert.equal(on.source, source); // Missing user installations retain Pi's remote fallback.
   assert.equal(change(row(off, on), 'project', 'inherit'), null);
   assert.equal(effectiveStatus(off, undefined), 'Disabled');
+});
+
+test('project enable reuses existing user git and npm installations', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-ext-shared-install-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [remote, segments] of [
+    [source, ['git', 'github.com', 'example', 'tools']],
+    ['npm:@org/foo@1', ['npm', 'node_modules', '@org', 'foo']],
+  ]) {
+    const userDir = join(root, remote.startsWith('git:') ? 'git-agent' : 'npm-agent');
+    const projectDir = join(root, 'project');
+    const installed = join(userDir, ...segments);
+    await mkdir(installed, { recursive: true });
+    await writeFile(join(installed, 'package.json'), '{}');
+    const off = change(listPackages({ packages: [remote] }, {}, userDir, projectDir)[0], 'global', 'disable');
+    const shared = listPackages({ packages: [off] }, {}, userDir, projectDir)[0];
+    assert.equal(shared.sharedPath, installed);
+    const on = change(shared, 'project', 'enable');
+    assert.equal(on.source, installed);
+    assert.equal(effectiveStatus(off, on), 'Enabled');
+    const managed = listPackages({ packages: [off] }, { packages: [on] }, userDir, projectDir)[0];
+    assert.equal(managed.project, on);
+    assert.equal(managed.projectIndex, 0);
+    assert.equal(change(managed, 'project', 'inherit'), null);
+    const disabled = change(managed, 'project', 'disable');
+    assert.equal(disabled.source, remote);
+    assert.equal(disabled.autoload, false);
+  }
 });
 
 test('project disable wins over global enable and removes only manager-owned changes', () => {

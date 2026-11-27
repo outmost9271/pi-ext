@@ -6,8 +6,8 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { Input, SelectList, truncateToWidth } from '@earendil-works/pi-tui';
 import {
-  canonicalSettings, effectiveStatus, isManager, listPackages, loadSettings, packages,
-  parseCommand, projectStatus, replacePackage, saveSettings, selectPackage, sourceInfo, sourceOf,
+  canonicalSettings, effectiveStatus, isManager, listPackages, loadSettings,
+  parseCommand, projectStatus, replacePackage, saveSettings, selectPackage,
   status, transition, usage,
 } from '../src/config.mjs';
 import { availableScopes, completeArguments } from '../src/completion.mjs';
@@ -88,9 +88,7 @@ async function apply(ctx: ExtensionCommandContext, command: Command): Promise<bo
     const row = selectPackage(listPackages(user.value, project, paths.userDir, ctx.cwd), command.target);
     if (isManager(row, root)) throw new Error('pi-ext cannot manage itself. Use Pi settings instead.');
     const next = transition(row, command);
-    const index = local
-      ? packages(project).findIndex((entry) => sourceInfo(sourceOf(entry), ctx.cwd).id === row.id)
-      : row.index;
+    const index = local ? row.projectIndex : row.index;
     const updated = replacePackage(target.value, index, next);
     if (updated === target.value) return false;
     await saveSettings(file, target.raw, updated);

@@ -113,14 +113,37 @@ export function effectiveStatus(global, project) {
   return status(project);
 }
 
+function userInstallPath(info, userDir) {
+  if (info.path) return info.path;
+  if (info.id.startsWith('git:')) return join(userDir, 'git', ...info.id.slice(4).split('/'));
+  if (info.id.startsWith('npm:')) return join(userDir, 'npm', 'node_modules', info.name);
+  return undefined;
+}
+
+function reusableInstallPath(info, userDir) {
+  const path = userInstallPath(info, userDir);
+  if (!path) return undefined;
+  try {
+    if (!statSync(path).isDirectory()) return undefined;
+    // A partial remote installation should fall back to Pi's remote installer.
+    if (!info.path && !statSync(join(path, 'package.json')).isFile()) return undefined;
+    return path;
+  } catch { return undefined; }
+}
+
 export function listPackages(user, project, userDir, projectDir) {
-  const projects = packages(project).map((entry) => ({ entry, ...sourceInfo(sourceOf(entry), projectDir) }));
+  const projects = packages(project).map((entry, index) => ({ entry, index, ...sourceInfo(sourceOf(entry), projectDir) }));
   const counts = new Map();
   const rows = packages(user).map((global, index) => {
     const info = sourceInfo(sourceOf(global), userDir);
-    const matching = projects.filter((item) => item.id === info.id);
+    const sharedPath = reusableInstallPath(info, userDir);
+    const sharedId = sharedPath ? sourceInfo(sharedPath, userDir).id : undefined;
+    const matching = projects.filter((item) => item.id === info.id || (sharedId && item.id === sharedId));
     counts.set(info.id, (counts.get(info.id) ?? 0) + 1);
-    return { ...info, global, index, project: matching[0]?.entry, ambiguousProject: matching.length > 1 };
+    return {
+      ...info, global, index, sharedPath, project: matching[0]?.entry, projectIndex: matching[0]?.index ?? -1,
+      ambiguousProject: matching.length > 1,
+    };
   });
   return rows.map((row) => ({ ...row, ambiguousGlobal: counts.get(row.id) > 1 }));
 }
@@ -176,7 +199,8 @@ export function transition(row, { scope, verb }) {
   if (globalMarker === null && !original) throw new Error('The global entry was edited externally. The original filters cannot be determined safely.');
   const base = original ?? globalMarker?.previous ?? row.global;
   const native = enabled(base);
-  const source = original ? sourceOf(original) : row.path ?? row.source;
+  // A local path reuses the user installation instead of cloning a remote project copy.
+  const source = original ? sourceOf(original) : row.sharedPath ?? row.path ?? row.source;
   return wrap({ ...native, source }, verb, original);
 }
 
